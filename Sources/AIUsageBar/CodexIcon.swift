@@ -3,7 +3,7 @@ import AppKit
 enum CodexIcon {
     /// 코덱스 로고풍 — 둥근 사각형 안 터미널 프롬프트(>_), SF Symbols terminal.fill 재사용.
     /// 심볼 미존재(구 macOS) 시 ClaudeIcon과 같은 방식의 수제 드로잉 폴백.
-    static let shared: NSImage = make()
+    static let shared: NSImage = BrandLogo.openai ?? make()
 
     private static func make(size: CGFloat = 16) -> NSImage {
         if let sym = NSImage(systemSymbolName: "terminal.fill", accessibilityDescription: "Codex") {

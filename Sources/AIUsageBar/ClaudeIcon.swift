@@ -2,7 +2,7 @@ import AppKit
 
 enum ClaudeIcon {
     /// 클로드풍 8방사 별표 — 단색 템플릿(다크/라이트 자동), static 캐시
-    static let shared: NSImage = make()
+    static let shared: NSImage = BrandLogo.claude ?? make()
 
     private static func make(size: CGFloat = 16) -> NSImage {
         let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
