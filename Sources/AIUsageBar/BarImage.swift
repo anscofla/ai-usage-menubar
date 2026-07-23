@@ -7,12 +7,12 @@ import AIUsageCore
 /// isTemplate = true 로 그려 메뉴바 라이트/다크에 자동 적응.
 enum BarImage {
     private static let height: CGFloat = 18
-    private static let iconSide: CGFloat = 17
+    private static let iconSide: CGFloat = 18
     private static let iconGap: CGFloat = 3      // 아이콘↔숫자
     private static let sectionGap: CGFloat = 9   // 섹션 사이
 
     static func make(sections: [UsageModel.Section], hasError: Bool, loadingTitle: String?) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
 
         var parts: [(icon: NSImage, text: NSAttributedString)] = []
