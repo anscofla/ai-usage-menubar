@@ -29,7 +29,11 @@ enum BarImage {
             parts.append((ClaudeIcon.shared, [], NSAttributedString(string: loading, attributes: loadingAttrs)))
         } else {
             for s in sections {
-                parts.append((s.id == "codex" ? CodexIcon.shared : ClaudeIcon.shared, s.readings, nil))
+                let icon = s.id == "codex" ? CodexIcon.shared : ClaudeIcon.shared
+                // 수치 없는 섹션(최초 조회 실패 등)은 배터리 대신 "--" 표시
+                let dash = s.readings.isEmpty
+                    ? NSAttributedString(string: "--", attributes: loadingAttrs) : nil
+                parts.append((icon, s.readings, dash))
             }
         }
         if hasError { parts.append((warnIcon, [], nil)) }
