@@ -220,7 +220,8 @@ internal static class ClientTests
             (_, err) = await client.FetchAsync(CancellationToken.None);
             TestHarness.Check(err == "request timed out", "client: timeout reason");
 
-            // token cached across successful polls (credentials read once)
+            // credentials reread every poll — account switch shows up on the next refresh
+            // even though the old token is still valid (no 401 to trigger a reread)
             var tokensSeen = new List<string>();
             client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
             { tokensSeen.Add(token); return Task.FromResult((200, GoodBody)); });
@@ -228,7 +229,7 @@ internal static class ClientTests
             await File.WriteAllTextAsync(credPath,
                 """{"claudeAiOauth":{"accessToken":"rotated-token","expiresAt":9999999999999}}""");
             await client.FetchAsync(CancellationToken.None);
-            TestHarness.Check(tokensSeen is ["synthetic-token", "synthetic-token"], "client: token cached between polls");
+            TestHarness.Check(tokensSeen is ["synthetic-token", "rotated-token"], "client: account switch picked up next poll");
 
             // 401 rereads the file and passes the NEW token to the retry.
             // Rotation happens INSIDE the fake transport's first call — if it happened before,

@@ -7,8 +7,6 @@ public sealed class UsageClient
     private const string Endpoint = "https://api.anthropic.com/api/oauth/usage";
     private readonly string _credentialsPath;
     private readonly Func<string, CancellationToken, Task<(int Status, string Body)>> _httpGet;
-    private string? _cachedToken;
-
     public UsageClient(string credentialsPath,
         Func<string, CancellationToken, Task<(int Status, string Body)>> httpGet)
     {
@@ -31,13 +29,12 @@ public sealed class UsageClient
 
     public async Task<(UsageSnapshot? Snapshot, string? Error)> FetchAsync(CancellationToken ct)
     {
-        var token = _cachedToken;
-        if (token == null)
-        {
-            var (cred, credErr) = ReadCredentials();
-            if (cred == null) return (null, credErr);
-            token = _cachedToken = cred.AccessToken;
-        }
+        // Reread credentials every poll (no memory cache): an account switch rotates the
+        // token without invalidating the old one, so a 401 never fires — a fresh read is
+        // the only way "Refresh now" picks up the new account.
+        var (cred0, credErr0) = ReadCredentials();
+        if (cred0 == null) return (null, credErr0);
+        var token = cred0.AccessToken;
 
         int status; string body;
         var result = await GetSafeAsync(token, ct);
@@ -46,10 +43,8 @@ public sealed class UsageClient
 
         if (status == 401)
         {
-            _cachedToken = null;
             var (cred, credErr) = ReadCredentials();
             if (cred == null) return (null, credErr);
-            _cachedToken = cred.AccessToken;
             result = await GetSafeAsync(cred.AccessToken, ct);
             if (result.Error != null) return (null, result.Error);
             (status, body) = (result.Status, result.Body);

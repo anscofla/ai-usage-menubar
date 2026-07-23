@@ -31,7 +31,6 @@ public actor CodexProvider: UsageProvider {
         }
     }
 
-    private var cachedAuth: Auth?
     private let authLoader: @Sendable () throws -> Auth
     private let transport: Transport
 
@@ -113,16 +112,12 @@ public actor CodexProvider: UsageProvider {
     }
 
     public func fetch() async throws -> [LimitReading] {
-        let auth: Auth
-        if let a = cachedAuth { auth = a } else {
-            auth = try authLoader()
-            cachedAuth = auth
-        }
+        // 매 폴링마다 auth.json 재독(메모리 캐시 없음): 계정 전환은 옛 토큰을 무효화하지
+        // 않아 401이 안 뜨므로, 새로 읽어야만 새 계정이 반영된다.
+        let auth = try authLoader()
         var (data, code) = try await request(auth)
         if code == 401 {  // 토큰 회전 — auth.json 재독 1회
-            cachedAuth = nil
             let fresh = try authLoader()
-            cachedAuth = fresh
             (data, code) = try await request(fresh)
         }
         guard code == 200 else { throw CodexProviderError.badResponse(code) }

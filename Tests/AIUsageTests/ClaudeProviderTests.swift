@@ -83,14 +83,14 @@ private func stubTransport(_ codes: [Int], okBody: Data, calls: Counter) -> Clau
 func runClaudeProviderFetchTests() async {
     let okBody = fixture([session, weeklyAll, weeklyScoped].joined(separator: ","))
 
-    // 연속 200: 키체인(tokenLoader) 1회만
+    // 연속 200: 매 폴링마다 재독 — 계정 전환이 다음 새로고침에 반영돼야 함
     let l1 = Counter(), t1 = Counter()
-    let p1 = ClaudeProvider(tokenLoader: { l1.n += 1; return "tok" },
+    let p1 = ClaudeProvider(tokenLoader: { l1.n += 1; return "tok\(l1.n)" },
                             transport: stubTransport([200, 200], okBody: okBody, calls: t1))
     _ = try? await p1.fetch()
     _ = try? await p1.fetch()
-    expect(l1.n == 1, "fetch 캐시 — tokenLoader 1회")
-    expect(t1.n == 2, "fetch 캐시 — 요청은 2회")
+    expect(l1.n == 2, "폴링마다 재독 — 계정 전환 반영")
+    expect(t1.n == 2, "폴링마다 재독 — 요청은 2회")
 
     // 401→200: 재독·재요청 각 1회
     let l2 = Counter(), t2 = Counter()

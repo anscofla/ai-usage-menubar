@@ -23,7 +23,6 @@ public actor ClaudeProvider: UsageProvider {
 
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
 
-    private var cachedToken: String?
     private let tokenLoader: @Sendable () throws -> String
     private let transport: Transport
 
@@ -118,16 +117,12 @@ public actor ClaudeProvider: UsageProvider {
     }
 
     public func fetch() async throws -> [LimitReading] {
-        let token: String
-        if let t = cachedToken { token = t } else {
-            token = try tokenLoader()
-            cachedToken = token
-        }
+        // 매 폴링마다 키체인 재독(메모리 캐시 없음): 계정 전환은 옛 토큰을 무효화하지
+        // 않아 401이 안 뜨므로, 새로 읽어야만 새 계정이 반영된다.
+        let token = try tokenLoader()
         var (data, code) = try await request(token)
         if code == 401 {  // 토큰 회전 — 키체인 재독 1회
-            cachedToken = nil
             let fresh = try tokenLoader()
-            cachedToken = fresh
             (data, code) = try await request(fresh)
         }
         guard code == 200 else { throw ClaudeProviderError.badResponse(code) }
