@@ -33,10 +33,9 @@ public sealed class TrayAppContext : ApplicationContext
         ApplyState(_state);
         // Re-render the icon when display scale/monitor changes (DPI checklist item).
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
-        _pollTask = PollLoopAsync(); // retained so faults are observable, not fire-and-forget
+        // Fire-and-forget is safe: PollLoopAsync handles every exception internally.
+        _ = PollLoopAsync();
     }
-
-    private Task? _pollTask;
 
     private void OnDisplayChanged(object? sender, EventArgs e) =>
         _ui.Post(_ => ApplyState(_state), null);

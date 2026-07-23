@@ -1,2 +1,6 @@
 .build/
 dist/
+win-artifact/
+.claude/
+.codex/
+**/.credentials.json

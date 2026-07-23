@@ -32,7 +32,8 @@ public static class UsageParser
                 var raw = pctEl.GetDouble();
                 if (double.IsNaN(raw) || double.IsInfinity(raw) || raw < 0)
                     return (null, $"limit '{kind}' percent out of range");
-                var pct = (int)Math.Round(Math.Min(raw, 100)); // clamp >100, same policy as macOS version
+                // AwayFromZero matches Swift's .rounded() (64.5 → 65); default ToEven would drift.
+                var pct = (int)Math.Round(Math.Min(raw, 100), MidpointRounding.AwayFromZero);
 
                 if (!el.TryGetProperty("resets_at", out var rsEl) || rsEl.ValueKind != JsonValueKind.String ||
                     !DateTimeOffset.TryParse(rsEl.GetString(), System.Globalization.CultureInfo.InvariantCulture,

@@ -32,8 +32,15 @@ public actor ClaudeProvider: UsageProvider {
         self.transport = transport
     }
 
+    // 요청별 15초 제한 — 공유 세션 기본값(60초)에 폴링 주기가 끌려가지 않게
+    private static let session: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 15
+        return URLSession(configuration: cfg)
+    }()
+
     public static let liveTransport: Transport = { req in
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         return (data, (resp as? HTTPURLResponse)?.statusCode ?? -1)
     }
 

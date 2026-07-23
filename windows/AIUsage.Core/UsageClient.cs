@@ -16,7 +16,8 @@ public sealed class UsageClient
 
     public static UsageClient CreateDefault()
     {
-        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        // 256KB cap: the usage payload is ~1KB; a hostile/broken response must not balloon memory.
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = 256 * 1024 };
         return new UsageClient(CredentialsLoader.DefaultPath(), async (token, ct) =>
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, Endpoint);

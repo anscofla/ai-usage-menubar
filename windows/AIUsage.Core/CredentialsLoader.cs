@@ -2,7 +2,15 @@ using System.Text.Json;
 
 namespace AIUsage.Core;
 
-public sealed record Credentials(string AccessToken, long ExpiresAtMs);
+// Deliberately NOT a record: a positional record's generated ToString() would embed the
+// token, so any future log/interpolation line would leak it. ToString stays redacted.
+public sealed class Credentials
+{
+    public string AccessToken { get; }
+    public long ExpiresAtMs { get; }
+    public Credentials(string accessToken, long expiresAtMs) { AccessToken = accessToken; ExpiresAtMs = expiresAtMs; }
+    public override string ToString() => "Credentials(<redacted>)";
+}
 
 public static class CredentialsLoader
 {
@@ -36,14 +44,15 @@ public static class CredentialsLoader
 
     public static (Credentials? Credentials, string? Error) LoadFromFile(string path, long nowMs)
     {
-        // One bounded retry covers the credential-replacement race (file briefly missing or locked).
+        // One bounded retry covers the credential-replacement race (file briefly locked).
+        // A definitively missing file returns immediately — no point burning 500ms per poll.
         for (var attempt = 0; ; attempt++)
         {
             string? error;
             try
             {
                 if (File.Exists(path)) return ParseJson(File.ReadAllText(path), nowMs);
-                error = "credentials file not found";
+                return (null, "credentials file not found");
             }
             catch (IOException) { error = "credentials file unreadable"; }
             catch (UnauthorizedAccessException) { error = "credentials file access denied"; }

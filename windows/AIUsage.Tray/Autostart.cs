@@ -32,7 +32,8 @@ public static class Autostart
     {
         try
         {
-            var current = Environment.ProcessPath!;
+            var current = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(current)) return "autostart registration failed (process path unknown)";
             if (!string.Equals(current, InstalledExe, StringComparison.OrdinalIgnoreCase))
             {
                 Directory.CreateDirectory(InstallDir);

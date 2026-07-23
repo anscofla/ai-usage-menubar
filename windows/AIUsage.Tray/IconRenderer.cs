@@ -6,16 +6,11 @@ namespace AIUsage.Tray;
 
 public sealed class RenderedIcon : IDisposable
 {
-    private readonly IntPtr _hIcon;
     public Icon Icon { get; }
 
-    internal RenderedIcon(Icon icon, IntPtr hIcon) { Icon = icon; _hIcon = hIcon; }
+    internal RenderedIcon(Icon icon) { Icon = icon; }
 
-    public void Dispose()
-    {
-        Icon.Dispose();
-        if (_hIcon != IntPtr.Zero) NativeMethods.DestroyIcon(_hIcon);
-    }
+    public void Dispose() => Icon.Dispose();
 }
 
 public static class IconRenderer
@@ -48,14 +43,9 @@ public static class IconRenderer
             g.DrawString(text, font, Brushes.White, new RectangleF(0, 0.5f, sizePx, sizePx), fmt);
         }
 
+        // Icon.FromHandle doesn't own the HICON; clone an owned copy, then destroy the original.
         var hIcon = bmp.GetHicon();
-        return new RenderedIcon((Icon)Icon.FromHandle(hIcon).Clone(), DisposeTemp(hIcon));
-    }
-
-    // Icon.FromHandle doesn't own the HICON; we clone (owned copy) and destroy the original now.
-    private static IntPtr DisposeTemp(IntPtr hIcon)
-    {
-        NativeMethods.DestroyIcon(hIcon);
-        return IntPtr.Zero;
+        try { return new RenderedIcon((Icon)Icon.FromHandle(hIcon).Clone()); }
+        finally { NativeMethods.DestroyIcon(hIcon); }
     }
 }
