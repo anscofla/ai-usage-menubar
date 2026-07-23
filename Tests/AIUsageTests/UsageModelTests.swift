@@ -2,12 +2,15 @@ import Foundation
 import AIUsageCore
 
 final class StubProvider: UsageProvider, @unchecked Sendable {
-    let id = "stub"
+    let id: String
     let calls = Counter()
     var result: Result<[LimitReading], Error>
     var delayNs: UInt64 = 0
 
-    init(_ result: Result<[LimitReading], Error>) { self.result = result }
+    init(_ result: Result<[LimitReading], Error>, id: String = "stub") {
+        self.result = result
+        self.id = id
+    }
 
     func fetch() async throws -> [LimitReading] {
         calls.n += 1
@@ -68,4 +71,39 @@ func runUsageModelTests() async {
     let frozen = s4.calls.n
     try? await Task.sleep(nanoseconds: 150_000_000)
     expect(s4.calls.n == frozen, "stopPolling 후 fetch 없음")
+}
+
+@MainActor
+func runMultiProviderTests() async {
+    let claudeReadings = [
+        LimitReading(name: "시간한도", utilization: 64, resetsAt: nil),
+        LimitReading(name: "주별한도", utilization: 79, resetsAt: nil),
+        LimitReading(name: "Fable한도", utilization: 80, resetsAt: nil),
+    ]
+    let codexReadings = [LimitReading(name: "주간한도", utilization: 62, resetsAt: nil)]
+
+    // 둘 다 성공 → "64 79 80% ⌁ 62%"
+    let m1 = UsageModel(providers: [StubProvider(.success(claudeReadings), id: "claude"),
+                                    StubProvider(.success(codexReadings), id: "codex")])
+    await m1.refresh()
+    expect(m1.sections.count == 2, "멀티: 섹션 2개")
+    expect(m1.barTitle == "64 79 80% ⌁ 62%", "멀티: barTitle 두 섹션 병기")
+    expect(m1.lastError == nil, "멀티: 오류 없음")
+
+    // codex 미로그인 → 섹션 숨김, 클로드 단독 표기 (오류 아님)
+    let m2 = UsageModel(providers: [StubProvider(.success(claudeReadings), id: "claude"),
+                                    StubProvider(.failure(CodexProviderError.notLoggedIn), id: "codex")])
+    await m2.refresh()
+    expect(m2.sections.count == 1 && m2.barTitle == "64 79 80%", "멀티: 미로그인 = 섹션 숨김")
+    expect(m2.lastError == nil, "멀티: 미로그인은 오류 아님")
+
+    // codex 일시 오류 → 마지막 값 유지 + 섹션명 접두 오류
+    let codexStub = StubProvider(.success(codexReadings), id: "codex")
+    let m3 = UsageModel(providers: [StubProvider(.success(claudeReadings), id: "claude"), codexStub])
+    await m3.refresh()
+    codexStub.result = .failure(CodexProviderError.badResponse(500))
+    await m3.refresh()
+    expect(m3.sections.count == 2 && m3.sections[1].readings == codexReadings, "멀티: 실패 시 마지막 값 유지")
+    expect(m3.barTitle.hasSuffix("⚠︎"), "멀티: 부분 실패도 ⚠︎")
+    expect(m3.lastError?.hasPrefix("Codex:") == true, "멀티: 오류에 섹션명 접두")
 }

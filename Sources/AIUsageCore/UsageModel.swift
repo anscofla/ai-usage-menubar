@@ -3,19 +3,49 @@ import Combine
 
 @MainActor
 public final class UsageModel: ObservableObject {
-    @Published public private(set) var readings: [LimitReading] = []
-    @Published public private(set) var lastError: String?
-    public var provider: UsageProvider
+    public struct Section: Equatable, Identifiable {
+        public let id: String
+        public let title: String
+        public let readings: [LimitReading]
+        public let error: String?
+    }
+
+    @Published public private(set) var sections: [Section] = []
+    public let providers: [UsageProvider]
+    private var lastGood: [String: [LimitReading]] = [:]
     private var pollTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
 
     public init(provider: UsageProvider = ClaudeProvider()) {
-        self.provider = provider
+        self.providers = [provider]
+    }
+
+    public init(providers: [UsageProvider]) {
+        self.providers = providers
+    }
+
+    /// 기존 단일 프로바이더 호환 표면 (첫 섹션 기준)
+    public var readings: [LimitReading] { sections.first?.readings ?? [] }
+
+    public var lastError: String? {
+        let errs = sections.compactMap { s in
+            s.error.map { sections.count > 1 ? "\(s.title): \($0)" : $0 }
+        }
+        return errs.isEmpty ? nil : errs.joined(separator: " · ")
     }
 
     public var barTitle: String {
-        let base = LimitReading.barSummary(readings)
+        let parts = sections.map { LimitReading.barSummary($0.readings) }
+        let base = parts.isEmpty ? "--" : parts.joined(separator: " ⌁ ")
         return lastError == nil ? base : base + " ⚠︎"
+    }
+
+    static func title(for id: String) -> String {
+        switch id {
+        case "claude": return "Claude"
+        case "codex": return "Codex"
+        default: return id
+        }
     }
 
     /// 공유 단일비행: 동시 호출은 진행 중인 같은 refresh를 함께 기다린다
@@ -29,12 +59,21 @@ public final class UsageModel: ObservableObject {
     }
 
     private func performRefresh() async {
-        do {
-            readings = try await provider.fetch()
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription  // 마지막 readings 유지
+        var next: [Section] = []
+        for p in providers {
+            do {
+                let r = try await p.fetch()
+                lastGood[p.id] = r
+                next.append(Section(id: p.id, title: Self.title(for: p.id), readings: r, error: nil))
+            } catch CodexProviderError.notLoggedIn {
+                lastGood[p.id] = nil  // 미로그인 = 섹션 숨김 (오류 아님)
+            } catch {
+                next.append(Section(id: p.id, title: Self.title(for: p.id),
+                                    readings: lastGood[p.id] ?? [],  // 마지막 값 유지
+                                    error: error.localizedDescription))
+            }
         }
+        sections = next
     }
 
     public func startPolling(interval: TimeInterval = 60) {

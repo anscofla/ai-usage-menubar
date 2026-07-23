@@ -7,7 +7,7 @@ struct AIUsageBarApp: App {
     @StateObject private var model: UsageModel
 
     init() {
-        let m = UsageModel()
+        let m = UsageModel(providers: [ClaudeProvider(), CodexProvider()])
         m.startPolling()  // label .task 미발화 이슈 회피 — init에서 시작
         _model = StateObject(wrappedValue: m)
     }
@@ -15,15 +15,24 @@ struct AIUsageBarApp: App {
     var body: some Scene {
         MenuBarExtra {
             VStack(alignment: .leading, spacing: 8) {
-                if model.readings.isEmpty && model.lastError == nil {
+                if model.sections.isEmpty {
                     Text("불러오는 중…")
                 }
-                ForEach(Array(model.readings.enumerated()), id: \.offset) { _, r in
-                    Text(detailLine(r)).foregroundStyle(.primary)
-                }
-                if let err = model.lastError {
-                    Divider()
-                    Text("⚠︎ \(err)")
+                ForEach(model.sections) { section in
+                    if model.sections.count > 1 {
+                        Text(section.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(section.readings.enumerated()), id: \.offset) { _, r in
+                        Text(detailLine(r)).foregroundStyle(.primary)
+                    }
+                    if let err = section.error {
+                        Text("⚠︎ \(err)")
+                    }
+                    if section.id != model.sections.last?.id {
+                        Divider()
+                    }
                 }
                 Divider()
                 HStack {

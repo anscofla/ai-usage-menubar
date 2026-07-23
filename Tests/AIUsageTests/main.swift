@@ -14,7 +14,12 @@ expect(LimitReading.barSummary([]) == "--", "barSummary 빈 배열")
 runClaudeProviderTests()
 await runClaudeProviderFetchTests()
 
+// ── CodexProviderTests ──
+runCodexProviderTests()
+await runCodexProviderFetchTests()
+
 // ── UsageModelTests ──
 await runUsageModelTests()
+await runMultiProviderTests()
 
 finish()
