@@ -12,8 +12,11 @@ enum BarImage {
     private static let sectionGap: CGFloat = 9   // 섹션 사이
 
     static func make(sections: [UsageModel.Section], hasError: Bool, loadingTitle: String?) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .bold)
+        // 자간은 살짝 좁게(-0.8), 숫자 사이 공백은 넓게(+3) — 덩어리는 촘촘, 구분은 또렷
+        // .expansion은 로그 스케일 — log(0.96) ≈ -0.041 로 가로폭 96% 압축(세로는 그대로)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black,
+                                                    .kern: -0.8, .expansion: -0.041]
 
         var parts: [(icon: NSImage, text: NSAttributedString)] = []
         if let loading = loadingTitle {
@@ -23,7 +26,7 @@ enum BarImage {
                 let icon = s.id == "codex" ? CodexIcon.shared : ClaudeIcon.shared
                 var text = LimitReading.barSummary(s.readings)
                 if text.isEmpty { text = "--" }
-                parts.append((icon, NSAttributedString(string: text, attributes: attrs)))
+                parts.append((icon, styled(text, attrs)))
             }
         }
         if hasError {
@@ -57,6 +60,21 @@ enum BarImage {
         }
         img.isTemplate = true
         return img
+    }
+
+    private static func styled(_ text: String, _ attrs: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let a = NSMutableAttributedString(string: text, attributes: attrs)
+        for (i, ch) in text.unicodeScalars.enumerated() {
+            let r = NSRange(location: i, length: 1)
+            if ch == " " { a.addAttribute(.kern, value: 3.0, range: r) }
+            if ch == "%" {  // % 기호만 비볼드·3pt 작게, 앞 숫자와 간격 1.5
+                a.addAttribute(.font, value: NSFont.systemFont(ofSize: 11, weight: .regular), range: r)
+                if i > 0 {
+                    a.addAttribute(.kern, value: 1.5, range: NSRange(location: i - 1, length: 1))
+                }
+            }
+        }
+        return a
     }
 
     private static let warnIcon: NSImage = {
