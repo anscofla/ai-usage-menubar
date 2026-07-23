@@ -15,6 +15,7 @@ internal static class TestHarness
         CredentialsTests.Run();
         StateTests.Run();
         DisplayTests.Run();
+        ClientTests.Run().GetAwaiter().GetResult();
         Console.WriteLine(_failures == 0 ? "ALL PASS" : $"{_failures} FAILURES");
         return _failures == 0 ? 0 : 1;
     }
@@ -167,5 +168,88 @@ internal static class DisplayTests
         TestHarness.Check(Display.ResetCountdown(t0, t0) == "resets now", "disp: countdown at reset");
         TestHarness.Check(Display.ResetCountdown(t0.AddMinutes(-5), t0) == "resets now", "disp: countdown past reset");
         TestHarness.Check(Display.ResetCountdown(t0.AddDays(2), t0) == "resets in 48h 0m", "disp: countdown multi-day hours");
+    }
+}
+
+internal static class ClientTests
+{
+    private const string GoodBody = """
+    {"limits":[
+      {"kind":"session","percent":10,"resets_at":"2026-07-28T00:00:00Z"},
+      {"kind":"weekly_all","percent":20,"resets_at":"2026-07-28T00:00:00Z"},
+      {"kind":"weekly_scoped","percent":30,"resets_at":"2026-07-28T00:00:00Z"}
+    ]}
+    """;
+
+    public static async Task Run()
+    {
+        var credPath = Path.Combine(Path.GetTempPath(), $"aiusage-test-{Environment.ProcessId}.json");
+        await File.WriteAllTextAsync(credPath,
+            """{"claudeAiOauth":{"accessToken":"synthetic-token","expiresAt":9999999999999}}""");
+        try
+        {
+            var calls = 0;
+            var client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
+            { calls++; return Task.FromResult((200, GoodBody)); });
+            var (snap, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == null && snap!.Session.Percent == 10, "client: 200 ok");
+            TestHarness.Check(calls == 1, "client: single call on success");
+
+            calls = 0;
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
+            { calls++; return Task.FromResult(calls == 1 ? (401, "") : (200, GoodBody)); });
+            (snap, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == null && snap != null, "client: 401 → reread + retry succeeds");
+            TestHarness.Check(calls == 2, "client: exactly one retry");
+
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) => Task.FromResult((401, "")));
+            (snap, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(snap == null && err == "unauthorized (token stale?)", "client: persistent 401 degrades");
+
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) => Task.FromResult((500, "boom")));
+            (_, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == "usage API HTTP 500", "client: 5xx reason has no body echo");
+
+            client = new AIUsage.Core.UsageClient(credPath + ".missing", (token, ct) => Task.FromResult((200, GoodBody)));
+            (_, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == "credentials file not found", "client: missing creds short-circuits");
+
+            // timeout: HttpClient timeout surfaces as OCE without caller cancellation
+            client = new AIUsage.Core.UsageClient(credPath,
+                (token, ct) => throw new TaskCanceledException());
+            (_, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == "request timed out", "client: timeout reason");
+
+            // token cached across successful polls (credentials read once)
+            var tokensSeen = new List<string>();
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
+            { tokensSeen.Add(token); return Task.FromResult((200, GoodBody)); });
+            await client.FetchAsync(CancellationToken.None);
+            await File.WriteAllTextAsync(credPath,
+                """{"claudeAiOauth":{"accessToken":"rotated-token","expiresAt":9999999999999}}""");
+            await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(tokensSeen is ["synthetic-token", "synthetic-token"], "client: token cached between polls");
+
+            // 401 rereads the file and passes the NEW token to the retry.
+            // Rotation happens INSIDE the fake transport's first call — if it happened before,
+            // the first read would already return the new token and the assertion would prove nothing.
+            await File.WriteAllTextAsync(credPath,
+                """{"claudeAiOauth":{"accessToken":"old-token","expiresAt":9999999999999}}""");
+            tokensSeen.Clear();
+            client = new AIUsage.Core.UsageClient(credPath, async (token, ct) =>
+            {
+                tokensSeen.Add(token);
+                if (tokensSeen.Count == 1)
+                {
+                    await File.WriteAllTextAsync(credPath,
+                        """{"claudeAiOauth":{"accessToken":"new-token","expiresAt":9999999999999}}""");
+                    return (401, "");
+                }
+                return (200, GoodBody);
+            });
+            (snap, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == null && tokensSeen is ["old-token", "new-token"], "client: 401 retry uses reread token");
+        }
+        finally { File.Delete(credPath); }
     }
 }
