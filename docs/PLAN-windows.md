@@ -977,7 +977,9 @@ public sealed class TrayAppContext : ApplicationContext
     private async Task DoRefreshAsync()
     {
         UsageSnapshot? snap; string? err;
-        try { (snap, err) = await _client.FetchAsync(_cts.Token); }
+        // Task.Run: FetchAsync's synchronous prefix (credential file read + 500ms race retry)
+        // must not run on the UI thread (checkpoint-2 finding).
+        try { (snap, err) = await Task.Run(() => _client.FetchAsync(_cts.Token)); }
         catch (OperationCanceledException) { return; }
         catch (Exception) { (snap, err) = (null, "unexpected error"); } // no-crash: poll loop must never fault
         var next = TrayStateMachine.Next(_state, snap, err);
