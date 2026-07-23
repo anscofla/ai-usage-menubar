@@ -3,6 +3,7 @@
     <ProjectReference Include="..\AIUsage.Core\AIUsage.Core.csproj" />
   </ItemGroup>
   <PropertyGroup>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>

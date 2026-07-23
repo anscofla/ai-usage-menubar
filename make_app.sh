@@ -9,8 +9,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 STAGE="$TMP/AI Usage.app"
 
-mkdir -p "$STAGE/Contents/MacOS"
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 cp "$BIN" "$STAGE/Contents/MacOS/AIUsageBar"
+cp Resources/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
 cat > "$STAGE/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,6 +24,7 @@ cat > "$STAGE/Contents/Info.plist" <<'EOF'
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
 </dict></plist>
 EOF
 
