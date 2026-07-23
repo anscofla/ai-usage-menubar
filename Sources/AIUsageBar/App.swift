@@ -58,8 +58,13 @@ struct AIUsageBarApp: App {
     private func detailLine(_ r: LimitReading) -> String {
         var line = "\(r.name): \(r.utilization)%"
         if let reset = r.resetsAt {
+            let df = DateFormatter()
+            df.dateFormat = "M/d"
             let mins = max(0, Int(reset.timeIntervalSinceNow / 60))
-            line += "  (리셋까지 \(mins / 60)h \(mins % 60)m)"
+            let days = mins / 1440, hours = (mins % 1440) / 60
+            var remain = days > 0 ? "\(days)일 \(hours)h" : "\(hours)h \(mins % 60)m"
+            remain = "\(df.string(from: reset)), " + remain
+            line += "  (리셋 \(remain))"
         }
         return line
     }
