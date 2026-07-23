@@ -12,6 +12,7 @@ internal static class TestHarness
     public static int Main()
     {
         ParserTests.Run();
+        CredentialsTests.Run();
         Console.WriteLine(_failures == 0 ? "ALL PASS" : $"{_failures} FAILURES");
         return _failures == 0 ? 0 : 1;
     }
@@ -64,5 +65,39 @@ internal static class ParserTests
 
         (_, err) = UsageParser.Parse(Good.Replace("2026-07-23T10:00:00.123456+00:00", "23/07/2026 10:00"));
         TestHarness.Check(err != null, "parse: non-ISO date rejected");
+    }
+}
+
+internal static class CredentialsTests
+{
+    public static void Run()
+    {
+        const long now = 1_800_000_000_000; // synthetic epoch ms
+        var good = """{"claudeAiOauth":{"accessToken":"synthetic-token","expiresAt":1900000000000}}""";
+        var (cred, err) = CredentialsLoader.ParseJson(good, now);
+        TestHarness.Check(err == null && cred!.AccessToken == "synthetic-token", "cred: parse ok");
+        TestHarness.Check(cred!.ExpiresAtMs == 1_900_000_000_000, "cred: expiresAt ms");
+
+        (cred, err) = CredentialsLoader.ParseJson(
+            """{"claudeAiOauth":{"accessToken":"synthetic-token","expiresAt":1700000000000}}""", now);
+        TestHarness.Check(cred == null && err == "token expired", "cred: expired detected");
+
+        (cred, err) = CredentialsLoader.ParseJson("{}", now);
+        TestHarness.Check(cred == null && err != null, "cred: missing oauth block = error");
+
+        (cred, err) = CredentialsLoader.ParseJson("nope", now);
+        TestHarness.Check(cred == null && err == "credentials not valid JSON", "cred: invalid json = error");
+
+        (cred, err) = CredentialsLoader.ParseJson(
+            """{"claudeAiOauth":{"accessToken":"","expiresAt":1900000000000}}""", now);
+        TestHarness.Check(cred == null && err == "credentials token empty", "cred: empty token rejected");
+
+        (cred, err) = CredentialsLoader.ParseJson(
+            """{"claudeAiOauth":{"accessToken":"t","expiresAt":"soon"}}""", now);
+        TestHarness.Check(cred == null && err != null, "cred: non-numeric expiresAt = error");
+
+        (_, err) = CredentialsLoader.LoadFromFile(
+            Path.Combine(Path.GetTempPath(), "aiusage-definitely-missing.json"), now);
+        TestHarness.Check(err == "credentials file not found", "cred: missing file reason (after 1 retry)");
     }
 }
