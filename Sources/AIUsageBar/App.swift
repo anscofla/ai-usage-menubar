@@ -46,8 +46,16 @@ struct AIUsageBarApp: App {
             .frame(minWidth: 240, alignment: .leading)
         } label: {
             HStack(spacing: 3) {
-                Image(nsImage: ClaudeIcon.shared)
-                Text(model.barTitle)
+                if model.sections.isEmpty {
+                    Image(nsImage: ClaudeIcon.shared)
+                    Text(model.barTitle)  // "--" (+⚠︎)
+                } else {
+                    ForEach(model.sections) { s in
+                        Image(nsImage: s.id == "codex" ? CodexIcon.shared : ClaudeIcon.shared)
+                        Text(LimitReading.barSummary(s.readings))
+                    }
+                    if model.lastError != nil { Text("⚠︎") }
+                }
             }
         }
         .menuBarExtraStyle(.window)  // 메뉴 스타일은 비클릭 Text를 회색 처리 — 패널로 전환
