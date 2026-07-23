@@ -1,6 +1,6 @@
 # AI Usage Menubar
 
-A tiny native macOS menu bar app that shows your Claude usage limits at a glance — `✳ 64 79 80%` (session / weekly / model-scoped utilization), always visible, refreshed every 60 seconds.
+A tiny native macOS menu bar app that shows your Claude (and Codex) usage limits at a glance as battery-style gauges — fill width and digit size grow with utilization — always visible, refreshed every 60 seconds.
 
 한국어 문서: [README.ko.md](README.ko.md)
 
@@ -38,7 +38,7 @@ swift run AIUsageTests    # assert-based harness (works without XCTest), exits 1
 - Relies on an **unofficial** Anthropic endpoint — if the schema changes, the app degrades to a `⚠︎` indicator in the menu bar (no crash).
 - Assumes exactly one `weekly_scoped` limit; a second scoped model is reported as a schema error (`⚠︎`).
 - Token is whatever Claude Code last refreshed — if it expires from long inactivity, run Claude Code once.
-- Claude only for now. The `UsageProvider` protocol is the extension point for other providers (e.g. Codex) in v2.
+- Codex support piggybacks on `~/.codex/auth.json` and an unofficial ChatGPT endpoint; if you don't use Codex CLI the section simply doesn't appear.
 
 ## Design notes
 
@@ -49,7 +49,7 @@ See [docs/DESIGN.md](docs/DESIGN.md) and [docs/PLAN.md](docs/PLAN.md) (Korean) f
 A .NET port lives in `windows/` — tray icon shows the highest utilization with traffic-light coloring; right-click for details.
 
 - Requirements: Windows 10+, Claude Code installed and logged in with a subscription (OAuth) account **natively on Windows**. WSL installs and API-key/Bedrock/Vertex auth are not supported (the token file isn't where the app can see it).
-- Token source: `%USERPROFILE%\.claude\.credentials.json` (or `%CLAUDE_CONFIG_DIR%`).
+- Token source: `%USERPROFILE%\.claude\.credentials.json` (or `%CLAUDE_CONFIG_DIR%`). Codex usage is shown too when `%USERPROFILE%\.codex\auth.json` (or `%CODEX_HOME%`) exists — the icon number/color reflects the worst limit across both.
 - Build from source (recommended): install the .NET 10 SDK, then
   `dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
 - Prebuilt exe: see Releases (~45 MB zip, self-contained — no .NET install needed; SHA-256 checksums attached). It is unsigned, so SmartScreen will warn — building from source avoids this. Self-contained builds don't receive .NET runtime patches automatically; republished on .NET patch releases as needed.

@@ -16,6 +16,7 @@ internal static class TestHarness
         StateTests.Run();
         DisplayTests.Run();
         ClientTests.Run().GetAwaiter().GetResult();
+        CodexTests.Run().GetAwaiter().GetResult();
         Console.WriteLine(_failures == 0 ? "ALL PASS" : $"{_failures} FAILURES");
         return _failures == 0 ? 0 : 1;
     }
@@ -145,29 +146,44 @@ internal static class DisplayTests
         TestHarness.Check(Display.Severity(89) == Severity.Orange, "disp: 89 orange");
         TestHarness.Check(Display.Severity(90) == Severity.Red, "disp: 90 red");
 
+        var hidden = new CodexState.Hidden();
         var t = DateTimeOffset.UtcNow.AddHours(3);
         var snap = new UsageSnapshot(
             new(LimitKind.Session, 64, t),
             new(LimitKind.WeeklyAll, 79, t),
             new(LimitKind.WeeklyScoped, 100, t));
-        TestHarness.Check(Display.IconText(new TrayState.Ok(snap)) == "100", "disp: 100 renders '100'");
-        TestHarness.Check(Display.IconText(new TrayState.Degraded("x", null)) == "!", "disp: degraded '!'");
-        TestHarness.Check(Display.IconText(new TrayState.Loading()) == "…", "disp: loading ellipsis");
+        TestHarness.Check(Display.IconText(new TrayState.Ok(snap), hidden) == "100", "disp: 100 renders '100'");
+        TestHarness.Check(Display.IconText(new TrayState.Degraded("x", null), hidden) == "!", "disp: degraded '!'");
+        TestHarness.Check(Display.IconText(new TrayState.Loading(), hidden) == "…", "disp: loading ellipsis");
 
-        TestHarness.Check(Display.Tooltip(new TrayState.Ok(snap)) ==
+        // codex worst limit wins the icon number
+        var codexHot = new CodexState.Ok([new CodexReading("5h", 40, null), new CodexReading("Weekly", 100, null)]);
+        var snapLow = new UsageSnapshot(
+            new(LimitKind.Session, 10, t), new(LimitKind.WeeklyAll, 20, t), new(LimitKind.WeeklyScoped, 30, t));
+        TestHarness.Check(Display.IconText(new TrayState.Ok(snapLow), codexHot) == "100", "disp: codex max wins icon");
+        TestHarness.Check(Display.CombinedMax(snapLow, hidden) == 30, "disp: hidden codex = claude max");
+
+        TestHarness.Check(Display.Tooltip(new TrayState.Ok(snap), hidden) ==
             "Session 64% · Weekly 79% · Model 100%", "disp: ok tooltip");
+        TestHarness.Check(Display.Tooltip(new TrayState.Ok(snapLow), codexHot) ==
+            "Session 10% · Weekly 20% · Model 30% · Codex 40/100%", "disp: tooltip includes codex");
         var longReason = new string('x', 300);
-        var tip = Display.Tooltip(new TrayState.Degraded(longReason, snap));
+        var tip = Display.Tooltip(new TrayState.Degraded(longReason, snap), hidden);
         var expectedFull = $"⚠ {longReason} · Session 64% · Weekly 79% · Model 100%";
         TestHarness.Check(tip == expectedFull[..127], "disp: tooltip is exact 127-char prefix");
 
         var t0 = new DateTimeOffset(2026, 7, 23, 10, 0, 0, TimeSpan.Zero);
-        TestHarness.Check(Display.ResetCountdown(t0.AddHours(3).AddMinutes(12), t0) == "resets in 3h 12m", "disp: countdown h+m");
+        // expected date strings mirror ResetCountdown's local-time conversion (TZ-safe)
+        static string D(DateTimeOffset x) { var l = x.ToLocalTime(); return $"{l.Month}/{l.Day}"; }
+        var r1 = t0.AddHours(3).AddMinutes(12);
+        TestHarness.Check(Display.ResetCountdown(r1, t0) == $"resets {D(r1)}, 3h 12m", "disp: countdown date h+m");
         TestHarness.Check(Display.ResetCountdown(t0.AddMinutes(59).AddSeconds(59), t0) == "resets in 59m", "disp: countdown 59m59s");
-        TestHarness.Check(Display.ResetCountdown(t0.AddHours(1), t0) == "resets in 1h 0m", "disp: countdown exactly 1h");
+        var r2 = t0.AddHours(1);
+        TestHarness.Check(Display.ResetCountdown(r2, t0) == $"resets {D(r2)}, 1h 0m", "disp: countdown exactly 1h");
         TestHarness.Check(Display.ResetCountdown(t0, t0) == "resets now", "disp: countdown at reset");
         TestHarness.Check(Display.ResetCountdown(t0.AddMinutes(-5), t0) == "resets now", "disp: countdown past reset");
-        TestHarness.Check(Display.ResetCountdown(t0.AddDays(2), t0) == "resets in 48h 0m", "disp: countdown multi-day hours");
+        var r3 = t0.AddDays(5).AddHours(13);
+        TestHarness.Check(Display.ResetCountdown(r3, t0) == $"resets {D(r3)}, 5d 13h", "disp: countdown days+hours");
     }
 }
 
@@ -252,5 +268,122 @@ internal static class ClientTests
             TestHarness.Check(err == null && tokensSeen is ["old-token", "new-token"], "client: 401 retry uses reread token");
         }
         finally { File.Delete(credPath); }
+    }
+}
+
+internal static class CodexTests
+{
+    private const string GoodBody = """
+    {"rate_limit":{
+      "primary_window":{"used_percent":64.6,"limit_window_seconds":18000,"reset_at":1785000000},
+      "secondary_window":{"used_percent":79.2,"limit_window_seconds":604800,"reset_at":1785400000}
+    }}
+    """;
+
+    public static async Task Run()
+    {
+        // parser
+        var (readings, err) = CodexParser.Parse(GoodBody);
+        TestHarness.Check(err == null && readings!.Count == 2, "codex: parse good payload");
+        TestHarness.Check(readings![0] is { Name: "5h", Percent: 65 }, "codex: primary window name+rounding");
+        TestHarness.Check(readings[1] is { Name: "Weekly", Percent: 79 }, "codex: weekly window");
+        TestHarness.Check(readings[0].ResetsAt == DateTimeOffset.FromUnixTimeSeconds(1_785_000_000), "codex: reset epoch seconds");
+
+        (_, err) = CodexParser.Parse("""{"rate_limit":{}}""");
+        TestHarness.Check(err != null, "codex: no windows = error");
+        (_, err) = CodexParser.Parse("""{"rate_limit":{"primary_window":{"used_percent":-1}}}""");
+        TestHarness.Check(err != null, "codex: negative percent = error");
+        (readings, err) = CodexParser.Parse("""{"rate_limit":{"primary_window":{"used_percent":150}}}""");
+        TestHarness.Check(err == null && readings![0] is { Name: "Limit", Percent: 100, ResetsAt: null }, "codex: clamp + missing fields tolerated");
+        (_, err) = CodexParser.Parse("not json");
+        TestHarness.Check(err != null, "codex: invalid json = error");
+        TestHarness.Check(CodexParser.WindowName(1800) == "30m", "codex: minutes window name");
+
+        // .5 must round AwayFromZero (64.5 → 65), not banker's ToEven (→ 64)
+        (readings, err) = CodexParser.Parse("""{"rate_limit":{"primary_window":{"used_percent":64.5}}}""");
+        TestHarness.Check(err == null && readings![0].Percent == 65, "codex: .5 rounds away from zero");
+        // finite but absurd epoch must not throw — dropped as no reset info
+        (readings, err) = CodexParser.Parse("""{"rate_limit":{"primary_window":{"used_percent":1,"reset_at":1e30}}}""");
+        TestHarness.Check(err == null && readings![0].ResetsAt == null, "codex: out-of-range epoch tolerated");
+
+        // auth
+        var (auth, aerr) = CodexAuthLoader.ParseJson(
+            """{"tokens":{"access_token":"synthetic","account_id":"acc-1"}}""");
+        TestHarness.Check(aerr == null && auth!.AccessToken == "synthetic" && auth.AccountId == "acc-1", "codex: auth parse ok");
+        TestHarness.Check(auth!.ToString() == "CodexAuth(<redacted>)", "codex: auth ToString redacted");
+        (auth, aerr) = CodexAuthLoader.ParseJson("""{"tokens":{"access_token":""}}""");
+        TestHarness.Check(auth == null && aerr != null, "codex: empty token rejected");
+
+        var (_, _, loggedIn) = CodexAuthLoader.LoadFromFile(
+            Path.Combine(Path.GetTempPath(), "aiusage-codex-missing.json"));
+        TestHarness.Check(!loggedIn, "codex: missing auth file = not logged in");
+
+        // state machine
+        var st = CodexStateMachine.Next(new CodexState.Loading(), new CodexFetchResult(null, null, false));
+        TestHarness.Check(st is CodexState.Hidden, "codex: logged-out = hidden");
+        var okReadings = new List<CodexReading> { new("Weekly", 12, null) };
+        st = CodexStateMachine.Next(st, new CodexFetchResult(okReadings, null, true));
+        TestHarness.Check(st is CodexState.Ok, "codex: readings = ok");
+        st = CodexStateMachine.Next(st, new CodexFetchResult(null, "boom", true));
+        TestHarness.Check(st is CodexState.Degraded { Reason: "boom" } d && d.Last == okReadings, "codex: failure keeps last readings");
+
+        // client
+        var authPath = Path.Combine(Path.GetTempPath(), $"aiusage-codex-test-{Environment.ProcessId}.json");
+        await File.WriteAllTextAsync(authPath,
+            """{"tokens":{"access_token":"old-token","account_id":"acc-1"}}""");
+        try
+        {
+            var seen = new List<string>();
+            var client = new CodexClient(authPath, async (a, ct) =>
+            {
+                seen.Add(a.AccessToken);
+                if (seen.Count == 1)
+                {
+                    await File.WriteAllTextAsync(authPath,
+                        """{"tokens":{"access_token":"new-token"}}""");
+                    return (401, "");
+                }
+                return (200, GoodBody);
+            });
+            var res = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(res.Error == null && res.Readings != null && seen is ["old-token", "new-token"],
+                "codex client: 401 retry uses reread token");
+
+            client = new CodexClient(authPath, (a, ct) => Task.FromResult((500, "boom")));
+            res = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(res is { Readings: null, Error: "codex API HTTP 500", LoggedIn: true }, "codex client: 5xx no body echo");
+
+            client = new CodexClient(authPath + ".missing", (a, ct) => Task.FromResult((200, GoodBody)));
+            res = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(res is { LoggedIn: false, Error: null }, "codex client: missing file = hidden, no error");
+
+            // persistent 401 → exactly one retry, then degraded
+            var calls = 0;
+            client = new CodexClient(authPath, (a, ct) => { calls++; return Task.FromResult((401, "")); });
+            res = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(res.Readings == null && res.Error != null && calls == 2, "codex client: persistent 401 = one retry then degraded");
+
+            // auth reread between two SUCCESSFUL polls (account switch, no 401)
+            seen.Clear();
+            client = new CodexClient(authPath, (a, ct) => { seen.Add(a.AccessToken); return Task.FromResult((200, GoodBody)); });
+            await client.FetchAsync(CancellationToken.None);
+            await File.WriteAllTextAsync(authPath, """{"tokens":{"access_token":"switched-token"}}""");
+            await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(seen is [_, "switched-token"], "codex client: account switch picked up next poll");
+
+            // transport exception → degraded reason, no throw
+            client = new CodexClient(authPath, (a, ct) => throw new HttpRequestException());
+            res = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(res is { Readings: null, Error: "codex network error" }, "codex client: network error contained");
+
+            // degraded codex surfaces in tooltip
+            var t = DateTimeOffset.UtcNow.AddHours(3);
+            var snap = new UsageSnapshot(
+                new(LimitKind.Session, 1, t), new(LimitKind.WeeklyAll, 2, t), new(LimitKind.WeeklyScoped, 3, t));
+            var degraded = new CodexState.Degraded("boom", [new CodexReading("Weekly", 12, null)]);
+            TestHarness.Check(Display.Tooltip(new TrayState.Ok(snap), degraded).EndsWith("· ⚠ Codex"),
+                "codex: degraded visible in tooltip");
+        }
+        finally { File.Delete(authPath); }
     }
 }

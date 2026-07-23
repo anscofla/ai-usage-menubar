@@ -15,12 +15,12 @@ public sealed class RenderedIcon : IDisposable
 
 public static class IconRenderer
 {
-    public static RenderedIcon Render(TrayState state, int sizePx)
+    public static RenderedIcon Render(TrayState state, CodexState codex, int sizePx)
     {
-        var text = Display.IconText(state);
+        var text = Display.IconText(state, codex);
         var back = state switch
         {
-            TrayState.Ok ok => Display.Severity(ok.Snapshot.MaxPercent) switch
+            TrayState.Ok ok => Display.Severity(Display.CombinedMax(ok.Snapshot, codex)) switch
             {
                 Severity.Red => Color.FromArgb(200, 40, 40),
                 Severity.Orange => Color.FromArgb(220, 130, 20),

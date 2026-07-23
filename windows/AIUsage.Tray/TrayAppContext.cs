@@ -6,9 +6,11 @@ public sealed class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _notify = new() { Visible = true };
     private readonly UsageClient _client = UsageClient.CreateDefault();
+    private readonly CodexClient _codexClient = CodexClient.CreateDefault();
     private readonly CancellationTokenSource _cts = new();
     private readonly SynchronizationContext _ui;
     private TrayState _state = new TrayState.Loading();
+    private CodexState _codex = new CodexState.Loading();
     private RenderedIcon? _currentIcon;
     private Task? _inFlight;
 
@@ -44,7 +46,9 @@ public sealed class TrayAppContext : ApplicationContext
     {
         while (!_cts.IsCancellationRequested)
         {
-            await RefreshOnceAsync();
+            // Belt-and-braces: RefreshOnceAsync shouldn't throw, but a fault here would
+            // silently kill the fire-and-forget loop forever.
+            try { await RefreshOnceAsync(); } catch (Exception) { }
             try { await Task.Delay(TimeSpan.FromSeconds(60), _cts.Token); }
             catch (OperationCanceledException) { return; }
         }
@@ -65,20 +69,31 @@ public sealed class TrayAppContext : ApplicationContext
         try { (snap, err) = await Task.Run(() => _client.FetchAsync(_cts.Token)); }
         catch (OperationCanceledException) { return; }
         catch (Exception) { (snap, err) = (null, "unexpected error"); } // no-crash: poll loop must never fault
+
+        CodexFetchResult codexResult;
+        try { codexResult = await Task.Run(() => _codexClient.FetchAsync(_cts.Token)); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception) { codexResult = new CodexFetchResult(null, "unexpected error", true); }
+
         var next = TrayStateMachine.Next(_state, snap, err);
-        _ui.Post(_ =>
+        var nextCodex = CodexStateMachine.Next(_codex, codexResult);
+        try
         {
-            try { _state = next; ApplyState(next); BuildMenu(); }
-            catch (Exception) { /* rendering failure must not kill the UI thread */ }
-        }, null);
+            _ui.Post(_ =>
+            {
+                try { _state = next; _codex = nextCodex; ApplyState(next); BuildMenu(); }
+                catch (Exception) { /* rendering failure must not kill the UI thread */ }
+            }, null);
+        }
+        catch (Exception) { /* Post can throw during shutdown — must not fault the poll loop */ }
     }
 
     private void ApplyState(TrayState state)
     {
         var size = Math.Max(SystemInformation.SmallIconSize.Width, SystemInformation.SmallIconSize.Height);
-        var rendered = IconRenderer.Render(state, size);
+        var rendered = IconRenderer.Render(state, _codex, size);
         _notify.Icon = rendered.Icon;
-        _notify.Text = Display.Tooltip(state);
+        _notify.Text = Display.Tooltip(state, _codex);
         _currentIcon?.Dispose();
         _currentIcon = rendered;
     }
@@ -104,6 +119,19 @@ public sealed class TrayAppContext : ApplicationContext
             AddLimitRow(menu, "Session", snapshot.Session, now);
             AddLimitRow(menu, "Weekly", snapshot.WeeklyAll, now);
             AddLimitRow(menu, "Model", snapshot.WeeklyScoped, now);
+        }
+
+        // Codex section — hidden entirely when not logged in
+        if (_codex is not CodexState.Hidden and not CodexState.Loading)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("Codex") { Enabled = false });
+            if (_codex is CodexState.Degraded cd)
+                menu.Items.Add(new ToolStripMenuItem($"⚠ {cd.Reason}") { Enabled = false });
+            foreach (var r in _codex.LastReadings ?? [])
+                menu.Items.Add(new ToolStripMenuItem(
+                    $"{r.Name}  {r.Percent}%" + (r.ResetsAt is { } ra
+                        ? $"  ·  {Display.ResetCountdown(ra, now)}" : "")) { Enabled = false });
         }
 
         menu.Items.Add(new ToolStripSeparator());
