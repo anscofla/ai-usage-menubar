@@ -1,0 +1,32 @@
+name: windows-build
+on:
+  push:
+    paths: ["windows/**", ".github/workflows/windows-build.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Test
+        run: dotnet run --project windows/AIUsage.Tests
+      - name: Publish
+        run: >
+          dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+      - name: Package and checksum (zip built and hashed on the runner — the hash must cover the exact asset users download)
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish/AIUsageTray.exe -DestinationPath AIUsageTray-win-x64.zip
+          (Get-FileHash AIUsageTray-win-x64.zip -Algorithm SHA256).Hash + "  AIUsageTray-win-x64.zip" | Out-File SHA256.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AIUsageTray-win-x64
+          path: |
+            AIUsageTray-win-x64.zip
+            SHA256.txt

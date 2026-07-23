@@ -44,6 +44,16 @@ swift run AIUsageTests    # assert-based harness (works without XCTest), exits 1
 
 See [docs/DESIGN.md](docs/DESIGN.md) and [docs/PLAN.md](docs/PLAN.md) (Korean) for the spec and the TDD build log.
 
+## Windows (system tray)
+
+A .NET port lives in `windows/` — tray icon shows the highest utilization with traffic-light coloring; right-click for details.
+
+- Requirements: Windows 10+, Claude Code installed and logged in with a subscription (OAuth) account **natively on Windows**. WSL installs and API-key/Bedrock/Vertex auth are not supported (the token file isn't where the app can see it).
+- Token source: `%USERPROFILE%\.claude\.credentials.json` (or `%CLAUDE_CONFIG_DIR%`).
+- Build from source (recommended): install the .NET 10 SDK, then
+  `dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
+- Prebuilt exe: see Releases (SHA-256 checksums attached). It is unsigned, so SmartScreen will warn — building from source avoids this.
+
 ## License
 
 [MIT](LICENSE)
