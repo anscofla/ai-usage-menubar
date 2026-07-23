@@ -45,25 +45,14 @@ struct AIUsageBarApp: App {
             .padding(12)
             .frame(minWidth: 240, alignment: .leading)
         } label: {
-            // MenuBarExtra 라벨은 상태바 버튼으로 평탄화되며 이미지 1개+텍스트 1개만
-            // 살아남는다 — 섹션별 아이콘은 Text 인라인 이미지로 합쳐 단일 Text로 렌더.
-            barLabel
+            // MenuBarExtra 라벨은 상태바 버튼으로 평탄화되며 이미지 1개만 확실히
+            // 살아남는다 — 아이콘+수치 전체를 BarImage로 합성해 이미지 하나만 넘긴다.
+            Image(nsImage: BarImage.make(
+                sections: model.sections,
+                hasError: model.lastError != nil,
+                loadingTitle: model.sections.isEmpty ? model.barTitle : nil))
         }
         .menuBarExtraStyle(.window)  // 메뉴 스타일은 비클릭 Text를 회색 처리 — 패널로 전환
-    }
-
-    private var barLabel: Text {
-        if model.sections.isEmpty {
-            return Text(Image(nsImage: ClaudeIcon.shared)) + Text(" \(model.barTitle)")
-        }
-        var t = Text("")
-        for (i, s) in model.sections.enumerated() {
-            if i > 0 { t = t + Text("  ") }
-            t = t + Text(Image(nsImage: s.id == "codex" ? CodexIcon.shared : ClaudeIcon.shared))
-                  + Text(" \(LimitReading.barSummary(s.readings))")
-        }
-        if model.lastError != nil { t = t + Text(" ⚠︎") }
-        return t
     }
 
     private func detailLine(_ r: LimitReading) -> String {
