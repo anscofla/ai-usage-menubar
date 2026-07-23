@@ -609,12 +609,25 @@ internal static class ClientTests
             await client.FetchAsync(CancellationToken.None);
             TestHarness.Check(tokensSeen is ["synthetic-token", "synthetic-token"], "client: token cached between polls");
 
-            // 401 rereads the rotated file and passes the NEW token to the retry
+            // 401 rereads the file and passes the NEW token to the retry.
+            // Rotation happens INSIDE the fake transport's first call — if it happened before,
+            // the first read would already return the new token and the assertion would prove nothing.
+            await File.WriteAllTextAsync(credPath,
+                """{"claudeAiOauth":{"accessToken":"old-token","expiresAt":9999999999999}}""");
             tokensSeen.Clear();
-            client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
-            { tokensSeen.Add(token); return Task.FromResult(tokensSeen.Count == 1 ? (401, "") : (200, GoodBody)); });
+            client = new AIUsage.Core.UsageClient(credPath, async (token, ct) =>
+            {
+                tokensSeen.Add(token);
+                if (tokensSeen.Count == 1)
+                {
+                    await File.WriteAllTextAsync(credPath,
+                        """{"claudeAiOauth":{"accessToken":"new-token","expiresAt":9999999999999}}""");
+                    return (401, "");
+                }
+                return (200, GoodBody);
+            });
             (snap, err) = await client.FetchAsync(CancellationToken.None);
-            TestHarness.Check(err == null && tokensSeen is [_, "rotated-token"], "client: 401 retry uses reread token");
+            TestHarness.Check(err == null && tokensSeen is ["old-token", "new-token"], "client: 401 retry uses reread token");
         }
         finally { File.Delete(credPath); }
     }

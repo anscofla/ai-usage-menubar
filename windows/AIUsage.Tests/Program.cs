@@ -34,7 +34,8 @@ internal static class ParserTests
         TestHarness.Check(snap!.Session.Percent == 64, "parse: session percent");
         TestHarness.Check(snap.WeeklyScoped.Percent == 80, "parse: scoped percent");
         TestHarness.Check(snap.MaxPercent == 80, "parse: max percent");
-        TestHarness.Check(snap.Session.ResetsAt.UtcDateTime.Hour == 10, "parse: fractional-seconds ISO8601");
+        var expectedReset = new DateTimeOffset(2026, 7, 23, 10, 0, 0, TimeSpan.Zero).AddTicks(1234560);
+        TestHarness.Check(snap.Session.ResetsAt == expectedReset, "parse: fractional-seconds preserved exactly");
 
         (_, err) = UsageParser.Parse("""{"limits":[]}""");
         TestHarness.Check(err != null, "parse: empty limits = schema error");
@@ -60,5 +61,8 @@ internal static class ParserTests
 
         (snap, err) = UsageParser.Parse(Good.Replace("\"percent\":64", "\"percent\":64.6"));
         TestHarness.Check(err == null && snap!.Session.Percent == 65, "parse: decimal rounds");
+
+        (_, err) = UsageParser.Parse(Good.Replace("2026-07-23T10:00:00.123456+00:00", "23/07/2026 10:00"));
+        TestHarness.Check(err != null, "parse: non-ISO date rejected");
     }
 }

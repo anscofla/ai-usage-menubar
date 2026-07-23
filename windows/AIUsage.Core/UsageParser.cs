@@ -35,7 +35,8 @@ public static class UsageParser
                 var pct = (int)Math.Round(Math.Min(raw, 100)); // clamp >100, same policy as macOS version
 
                 if (!el.TryGetProperty("resets_at", out var rsEl) || rsEl.ValueKind != JsonValueKind.String ||
-                    !DateTimeOffset.TryParse(rsEl.GetString(), out var resetsAt))
+                    !DateTimeOffset.TryParse(rsEl.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out var resetsAt))
                     return (null, $"limit '{kind}' missing/invalid resets_at");
 
                 switch (kind)
