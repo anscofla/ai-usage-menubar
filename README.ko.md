@@ -36,4 +36,4 @@ swift run AIUsageTests    # CLT-only 환경이라 XCTest 대신 assert 하니스
 - 토큰 소스: `%USERPROFILE%\.claude\.credentials.json` (또는 `%CLAUDE_CONFIG_DIR%`).
 - 소스 빌드(권장): .NET 10 SDK 설치 후
   `dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
-- 빌드된 exe: Releases 참조(SHA-256 체크섬 첨부). 서명이 없어 SmartScreen 경고가 뜬다 — 소스 빌드로 회피 가능.
+- 빌드된 exe: Releases 참조(약 45MB zip, self-contained — .NET 설치 불필요; SHA-256 체크섬 첨부). 서명이 없어 SmartScreen 경고가 뜬다 — 소스 빌드로 회피 가능. self-contained 빌드는 .NET 런타임 패치가 자동 반영되지 않아 필요 시 재발행.

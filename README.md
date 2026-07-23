@@ -52,7 +52,7 @@ A .NET port lives in `windows/` — tray icon shows the highest utilization with
 - Token source: `%USERPROFILE%\.claude\.credentials.json` (or `%CLAUDE_CONFIG_DIR%`).
 - Build from source (recommended): install the .NET 10 SDK, then
   `dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
-- Prebuilt exe: see Releases (SHA-256 checksums attached). It is unsigned, so SmartScreen will warn — building from source avoids this.
+- Prebuilt exe: see Releases (~45 MB zip, self-contained — no .NET install needed; SHA-256 checksums attached). It is unsigned, so SmartScreen will warn — building from source avoids this. Self-contained builds don't receive .NET runtime patches automatically; republished on .NET patch releases as needed.
 
 ## License
 
