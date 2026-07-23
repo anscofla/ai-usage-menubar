@@ -13,6 +13,8 @@ internal static class TestHarness
     {
         ParserTests.Run();
         CredentialsTests.Run();
+        StateTests.Run();
+        DisplayTests.Run();
         Console.WriteLine(_failures == 0 ? "ALL PASS" : $"{_failures} FAILURES");
         return _failures == 0 ? 0 : 1;
     }
@@ -99,5 +101,71 @@ internal static class CredentialsTests
         (_, err) = CredentialsLoader.LoadFromFile(
             Path.Combine(Path.GetTempPath(), "aiusage-definitely-missing.json"), now);
         TestHarness.Check(err == "credentials file not found", "cred: missing file reason (after 1 retry)");
+    }
+}
+
+internal static class StateTests
+{
+    private static UsageSnapshot Snap(int s, int w, int m)
+    {
+        var t = DateTimeOffset.UtcNow.AddHours(3);
+        return new UsageSnapshot(
+            new(LimitKind.Session, s, t),
+            new(LimitKind.WeeklyAll, w, t),
+            new(LimitKind.WeeklyScoped, m, t));
+    }
+
+    public static void Run()
+    {
+        var ok = TrayStateMachine.Next(new TrayState.Loading(), Snap(64, 79, 80), null);
+        TestHarness.Check(ok is TrayState.Ok, "state: loading→ok");
+
+        var first = ((TrayState.Ok)ok).Snapshot;
+        var deg = TrayStateMachine.Next(ok, null, "http 500");
+        TestHarness.Check(deg is TrayState.Degraded d1 && d1.Last == first, "state: failure keeps exact last snapshot");
+
+        var deg2 = TrayStateMachine.Next(deg, null, "timeout");
+        TestHarness.Check(deg2 is TrayState.Degraded d2 && d2.Last == first, "state: repeated failure still keeps exact last");
+
+        var early = TrayStateMachine.Next(new TrayState.Loading(), null, "no file");
+        TestHarness.Check(early is TrayState.Degraded { Last: null }, "state: failure before first data = no last");
+
+        var back = TrayStateMachine.Next(deg2, Snap(1, 2, 3), null);
+        TestHarness.Check(back is TrayState.Ok, "state: recovery");
+    }
+}
+
+internal static class DisplayTests
+{
+    public static void Run()
+    {
+        TestHarness.Check(Display.Severity(69) == Severity.Green, "disp: 69 green");
+        TestHarness.Check(Display.Severity(70) == Severity.Orange, "disp: 70 orange");
+        TestHarness.Check(Display.Severity(89) == Severity.Orange, "disp: 89 orange");
+        TestHarness.Check(Display.Severity(90) == Severity.Red, "disp: 90 red");
+
+        var t = DateTimeOffset.UtcNow.AddHours(3);
+        var snap = new UsageSnapshot(
+            new(LimitKind.Session, 64, t),
+            new(LimitKind.WeeklyAll, 79, t),
+            new(LimitKind.WeeklyScoped, 100, t));
+        TestHarness.Check(Display.IconText(new TrayState.Ok(snap)) == "100", "disp: 100 renders '100'");
+        TestHarness.Check(Display.IconText(new TrayState.Degraded("x", null)) == "!", "disp: degraded '!'");
+        TestHarness.Check(Display.IconText(new TrayState.Loading()) == "…", "disp: loading ellipsis");
+
+        TestHarness.Check(Display.Tooltip(new TrayState.Ok(snap)) ==
+            "Session 64% · Weekly 79% · Model 100%", "disp: ok tooltip");
+        var longReason = new string('x', 300);
+        var tip = Display.Tooltip(new TrayState.Degraded(longReason, snap));
+        var expectedFull = $"⚠ {longReason} · Session 64% · Weekly 79% · Model 100%";
+        TestHarness.Check(tip == expectedFull[..127], "disp: tooltip is exact 127-char prefix");
+
+        var t0 = new DateTimeOffset(2026, 7, 23, 10, 0, 0, TimeSpan.Zero);
+        TestHarness.Check(Display.ResetCountdown(t0.AddHours(3).AddMinutes(12), t0) == "resets in 3h 12m", "disp: countdown h+m");
+        TestHarness.Check(Display.ResetCountdown(t0.AddMinutes(59).AddSeconds(59), t0) == "resets in 59m", "disp: countdown 59m59s");
+        TestHarness.Check(Display.ResetCountdown(t0.AddHours(1), t0) == "resets in 1h 0m", "disp: countdown exactly 1h");
+        TestHarness.Check(Display.ResetCountdown(t0, t0) == "resets now", "disp: countdown at reset");
+        TestHarness.Check(Display.ResetCountdown(t0.AddMinutes(-5), t0) == "resets now", "disp: countdown past reset");
+        TestHarness.Check(Display.ResetCountdown(t0.AddDays(2), t0) == "resets in 48h 0m", "disp: countdown multi-day hours");
     }
 }
