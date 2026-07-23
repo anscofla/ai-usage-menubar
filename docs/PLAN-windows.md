@@ -45,17 +45,14 @@ dotnet --version   # expect 10.x
 ```bash
 cd ~/Projects/ai-usage-menubar
 mkdir -p windows && cd windows
-dotnet new sln -n AIUsage
+dotnet new sln -n AIUsage --format sln   # .NET 10 defaults to .slnx without --format
 dotnet new classlib -n AIUsage.Core -f net10.0
-dotnet new winforms -n AIUsage.Tray -f net10.0-windows
+mkdir AIUsage.Tray                        # WinForms template may be absent on the macOS SDK — csproj written by hand in Step 3
 dotnet new console -n AIUsage.Tests -f net10.0
-dotnet sln add AIUsage.Core AIUsage.Tray AIUsage.Tests
-dotnet add AIUsage.Tray reference AIUsage.Core
-dotnet add AIUsage.Tests reference AIUsage.Core
-rm AIUsage.Core/Class1.cs AIUsage.Tray/Form1.cs AIUsage.Tray/Form1.Designer.cs
+rm AIUsage.Core/Class1.cs
 ```
 
-- [ ] **Step 3: Set Tray csproj properties** — overwrite `windows/AIUsage.Tray/AIUsage.Tray.csproj`:
+- [ ] **Step 3: Write Tray csproj by hand** — create `windows/AIUsage.Tray/AIUsage.Tray.csproj`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -73,14 +70,7 @@ rm AIUsage.Core/Class1.cs AIUsage.Tray/Form1.cs AIUsage.Tray/Form1.Designer.cs
 </Project>
 ```
 
-Also delete the generated `Program.cs` in AIUsage.Tray for now (`rm AIUsage.Tray/Program.cs`) — Task 7 writes the real one. To keep the project compiling until then, create `windows/AIUsage.Tray/Placeholder.cs`:
-
-```csharp
-// Removed in Task 7 when Program.cs lands.
-internal static class Placeholder { }
-```
-
-(A WinExe with no Main won't build; so instead keep a minimal `Program.cs`:)
+Then create a minimal `windows/AIUsage.Tray/Program.cs` (replaced in Task 7 — a WinExe with no Main won't build):
 
 ```csharp
 namespace AIUsage.Tray;
@@ -91,7 +81,14 @@ internal static class Program
 }
 ```
 
-Use the minimal `Program.cs` variant; skip `Placeholder.cs`.
+Wire up the solution (now that the Tray csproj exists):
+
+```bash
+cd ~/Projects/ai-usage-menubar/windows
+dotnet sln add AIUsage.Core AIUsage.Tray AIUsage.Tests
+dotnet add AIUsage.Tray reference AIUsage.Core
+dotnet add AIUsage.Tests reference AIUsage.Core
+```
 
 - [ ] **Step 4: Verify build + commit**
 
@@ -169,6 +166,15 @@ internal static class ParserTests
 
         (_, err) = UsageParser.Parse("""{"limits":[{"kind":"session","percent":"64","resets_at":"2026-07-28T00:00:00Z"}]}""");
         TestHarness.Check(err != null, "parse: non-numeric percent = error");
+
+        (_, err) = UsageParser.Parse(Good.Replace("\"percent\":64", "\"percent\":-1"));
+        TestHarness.Check(err != null, "parse: negative percent = error");
+
+        (snap, err) = UsageParser.Parse(Good.Replace("\"percent\":64", "\"percent\":150"));
+        TestHarness.Check(err == null && snap!.Session.Percent == 100, "parse: >100 clamped to 100");
+
+        (snap, err) = UsageParser.Parse(Good.Replace("\"percent\":64", "\"percent\":64.6"));
+        TestHarness.Check(err == null && snap!.Session.Percent == 65, "parse: decimal rounds");
     }
 }
 ```
@@ -227,7 +233,10 @@ public static class UsageParser
 
                 if (!el.TryGetProperty("percent", out var pctEl) || pctEl.ValueKind != JsonValueKind.Number)
                     return (null, $"limit '{kind}' missing numeric percent");
-                var pct = (int)Math.Round(pctEl.GetDouble());
+                var raw = pctEl.GetDouble();
+                if (double.IsNaN(raw) || double.IsInfinity(raw) || raw < 0)
+                    return (null, $"limit '{kind}' percent out of range");
+                var pct = (int)Math.Round(Math.Min(raw, 100)); // clamp >100, same policy as macOS version
 
                 if (!el.TryGetProperty("resets_at", out var rsEl) || rsEl.ValueKind != JsonValueKind.String ||
                     !DateTimeOffset.TryParse(rsEl.GetString(), out var resetsAt))
@@ -295,9 +304,13 @@ internal static class CredentialsTests
         (cred, err) = AIUsage.Core.CredentialsLoader.ParseJson("nope", now);
         TestHarness.Check(cred == null && err != null, "cred: invalid json = error");
 
+        (cred, err) = AIUsage.Core.CredentialsLoader.ParseJson(
+            """{"claudeAiOauth":{"accessToken":"","expiresAt":1900000000000}}""", now);
+        TestHarness.Check(cred == null && err == "credentials token empty", "cred: empty token rejected");
+
         (_, err) = AIUsage.Core.CredentialsLoader.LoadFromFile(
             Path.Combine(Path.GetTempPath(), "aiusage-definitely-missing.json"), now);
-        TestHarness.Check(err == "credentials file not found", "cred: missing file reason");
+        TestHarness.Check(err == "credentials file not found", "cred: missing file reason (after 1 retry)");
     }
 }
 ```
@@ -330,29 +343,33 @@ public static class CredentialsLoader
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth) ||
                 !oauth.TryGetProperty("accessToken", out var tok) || tok.ValueKind != JsonValueKind.String ||
-                !oauth.TryGetProperty("expiresAt", out var exp) || exp.ValueKind != JsonValueKind.Number)
+                !oauth.TryGetProperty("expiresAt", out var exp) || exp.ValueKind != JsonValueKind.Number ||
+                !exp.TryGetInt64(out var expiresAt))
                 return (null, "credentials missing claudeAiOauth fields");
-            var expiresAt = exp.GetInt64();
+            var token = tok.GetString();
+            if (string.IsNullOrWhiteSpace(token)) return (null, "credentials token empty");
             if (expiresAt <= nowMs) return (null, "token expired");
-            return (new Credentials(tok.GetString()!, expiresAt), null);
+            return (new Credentials(token, expiresAt), null);
         }
         catch (JsonException) { return (null, "credentials not valid JSON"); }
     }
 
     public static (Credentials? Credentials, string? Error) LoadFromFile(string path, long nowMs)
     {
+        // One bounded retry covers the credential-replacement race (file briefly missing or locked).
         for (var attempt = 0; ; attempt++)
         {
+            string? error = null;
             try
             {
-                if (!File.Exists(path)) return (null, "credentials file not found");
-                return ParseJson(File.ReadAllText(path), nowMs);
+                if (File.Exists(path)) return ParseJson(File.ReadAllText(path), nowMs);
+                error = "credentials file not found";
             }
-            catch (IOException)
-            {
-                if (attempt >= 1) return (null, "credentials file unreadable");
-                Thread.Sleep(500); // replacement race: one bounded retry
-            }
+            catch (IOException) { error = "credentials file unreadable"; }
+            catch (UnauthorizedAccessException) { error = "credentials file access denied"; }
+            catch (System.Security.SecurityException) { error = "credentials file access denied"; }
+            if (attempt >= 1) return (null, error);
+            Thread.Sleep(500);
         }
     }
 }
@@ -391,11 +408,12 @@ internal static class StateTests
         var ok = AIUsage.Core.TrayStateMachine.Next(new AIUsage.Core.TrayState.Loading(), Snap(64, 79, 80), null);
         TestHarness.Check(ok is AIUsage.Core.TrayState.Ok, "state: loading→ok");
 
+        var first = ((AIUsage.Core.TrayState.Ok)ok).Snapshot;
         var deg = AIUsage.Core.TrayStateMachine.Next(ok, null, "http 500");
-        TestHarness.Check(deg is AIUsage.Core.TrayState.Degraded { Last: not null }, "state: failure keeps last snapshot");
+        TestHarness.Check(deg is AIUsage.Core.TrayState.Degraded d1 && d1.Last == first, "state: failure keeps exact last snapshot");
 
         var deg2 = AIUsage.Core.TrayStateMachine.Next(deg, null, "timeout");
-        TestHarness.Check(deg2 is AIUsage.Core.TrayState.Degraded { Last: not null }, "state: repeated failure still keeps last");
+        TestHarness.Check(deg2 is AIUsage.Core.TrayState.Degraded d2 && d2.Last == first, "state: repeated failure still keeps exact last");
 
         var early = AIUsage.Core.TrayStateMachine.Next(new AIUsage.Core.TrayState.Loading(), null, "no file");
         TestHarness.Check(early is AIUsage.Core.TrayState.Degraded { Last: null }, "state: failure before first data = no last");
@@ -418,16 +436,21 @@ internal static class DisplayTests
             new(AIUsage.Core.LimitKind.Session, 64, t),
             new(AIUsage.Core.LimitKind.WeeklyAll, 79, t),
             new(AIUsage.Core.LimitKind.WeeklyScoped, 100, t));
-        TestHarness.Check(AIUsage.Core.Display.IconText(new AIUsage.Core.TrayState.Ok(snap)) == "99+", "disp: 100 renders 99+");
+        TestHarness.Check(AIUsage.Core.Display.IconText(new AIUsage.Core.TrayState.Ok(snap)) == "100", "disp: 100 renders '100'");
         TestHarness.Check(AIUsage.Core.Display.IconText(new AIUsage.Core.TrayState.Degraded("x", null)) == "!", "disp: degraded '!'");
 
-        var tip = AIUsage.Core.Display.Tooltip(new AIUsage.Core.TrayState.Degraded(new string('x', 300), snap));
-        TestHarness.Check(tip.Length <= 127, "disp: tooltip truncated to 127");
+        var longReason = new string('x', 300);
+        var tip = AIUsage.Core.Display.Tooltip(new AIUsage.Core.TrayState.Degraded(longReason, snap));
+        var expectedFull = $"⚠ {longReason} · Session 64% · Weekly 79% · Model 100%";
+        TestHarness.Check(tip == expectedFull[..127], "disp: tooltip is exact 127-char prefix");
 
-        var cd = AIUsage.Core.Display.ResetCountdown(
-            new DateTimeOffset(2026, 7, 23, 13, 12, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 7, 23, 10, 0, 0, TimeSpan.Zero));
-        TestHarness.Check(cd == "resets in 3h 12m", "disp: countdown format");
+        var t0 = new DateTimeOffset(2026, 7, 23, 10, 0, 0, TimeSpan.Zero);
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0.AddHours(3).AddMinutes(12), t0) == "resets in 3h 12m", "disp: countdown h+m");
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0.AddMinutes(59).AddSeconds(59), t0) == "resets in 59m", "disp: countdown 59m59s");
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0.AddHours(1), t0) == "resets in 1h 0m", "disp: countdown exactly 1h");
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0, t0) == "resets now", "disp: countdown at reset");
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0.AddMinutes(-5), t0) == "resets now", "disp: countdown past reset");
+        TestHarness.Check(AIUsage.Core.Display.ResetCountdown(t0.AddDays(2), t0) == "resets in 48h 0m", "disp: countdown multi-day hours");
     }
 }
 ```
@@ -475,9 +498,11 @@ public static class Display
         percent >= 90 ? AIUsage.Core.Severity.Red :
         percent >= 70 ? AIUsage.Core.Severity.Orange : AIUsage.Core.Severity.Green;
 
+    // 100 renders as "100" (smaller font). "99+" is the documented fallback ONLY if the
+    // on-device DPI legibility check fails — do not hard-code it preemptively.
     public static string IconText(TrayState state) => state switch
     {
-        TrayState.Ok ok => ok.Snapshot.MaxPercent >= 100 ? "99+" : ok.Snapshot.MaxPercent.ToString(),
+        TrayState.Ok ok => ok.Snapshot.MaxPercent.ToString(),
         TrayState.Degraded => "!",
         _ => "…",
     };
@@ -497,7 +522,7 @@ public static class Display
     public static string ResetCountdown(DateTimeOffset resetsAt, DateTimeOffset now)
     {
         var delta = resetsAt - now;
-        if (delta < TimeSpan.Zero) delta = TimeSpan.Zero;
+        if (delta <= TimeSpan.Zero) return "resets now";
         return delta.TotalHours >= 1
             ? $"resets in {(int)delta.TotalHours}h {delta.Minutes}m"
             : $"resets in {Math.Max(1, delta.Minutes)}m";
@@ -567,6 +592,29 @@ internal static class ClientTests
             client = new AIUsage.Core.UsageClient(credPath + ".missing", (token, ct) => Task.FromResult((200, GoodBody)));
             (_, err) = await client.FetchAsync(CancellationToken.None);
             TestHarness.Check(err == "credentials file not found", "client: missing creds short-circuits");
+
+            // timeout: HttpClient timeout surfaces as OCE without caller cancellation
+            client = new AIUsage.Core.UsageClient(credPath,
+                (token, ct) => throw new TaskCanceledException());
+            (_, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == "request timed out", "client: timeout reason");
+
+            // token cached across successful polls (credentials read once)
+            var tokensSeen = new List<string>();
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
+            { tokensSeen.Add(token); return Task.FromResult((200, GoodBody)); });
+            await client.FetchAsync(CancellationToken.None);
+            await File.WriteAllTextAsync(credPath,
+                """{"claudeAiOauth":{"accessToken":"rotated-token","expiresAt":9999999999999}}""");
+            await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(tokensSeen is ["synthetic-token", "synthetic-token"], "client: token cached between polls");
+
+            // 401 rereads the rotated file and passes the NEW token to the retry
+            tokensSeen.Clear();
+            client = new AIUsage.Core.UsageClient(credPath, (token, ct) =>
+            { tokensSeen.Add(token); return Task.FromResult(tokensSeen.Count == 1 ? (401, "") : (200, GoodBody)); });
+            (snap, err) = await client.FetchAsync(CancellationToken.None);
+            TestHarness.Check(err == null && tokensSeen is [_, "rotated-token"], "client: 401 retry uses reread token");
         }
         finally { File.Delete(credPath); }
     }
@@ -620,10 +668,9 @@ public sealed class UsageClient
         }
 
         int status; string body;
-        try { (status, body) = await _httpGet(token, ct); }
-        catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException) { return (null, "network error"); }
-        catch (TaskCanceledException) { return (null, "request timed out"); }
+        var result = await GetSafeAsync(token, ct);
+        if (result.Error != null) return (null, result.Error);
+        (status, body) = (result.Status, result.Body);
 
         if (status == 401)
         {
@@ -631,15 +678,30 @@ public sealed class UsageClient
             var (cred, credErr) = ReadCredentials();
             if (cred == null) return (null, credErr);
             _cachedToken = cred.AccessToken;
-            try { (status, body) = await _httpGet(cred.AccessToken, ct); }
-            catch (OperationCanceledException) { throw; }
-            catch (HttpRequestException) { return (null, "network error"); }
-            catch (TaskCanceledException) { return (null, "request timed out"); }
+            result = await GetSafeAsync(cred.AccessToken, ct);
+            if (result.Error != null) return (null, result.Error);
+            (status, body) = (result.Status, result.Body);
             if (status == 401) return (null, "unauthorized (token stale?)");
         }
 
         if (status != 200) return (null, $"usage API HTTP {status}");
         return UsageParser.Parse(body);
+    }
+
+    // TaskCanceledException derives from OperationCanceledException — a plain catch order
+    // (OCE first) makes the TCE clause unreachable (CS0160). Use a filtered handler instead:
+    // caller-initiated cancellation propagates, HttpClient timeout becomes a degraded reason.
+    private async Task<(int Status, string Body, string? Error)> GetSafeAsync(string token, CancellationToken ct)
+    {
+        try
+        {
+            var (status, body) = await _httpGet(token, ct);
+            return (status, body, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) { return (0, "", "request timed out"); }
+        catch (HttpRequestException) { return (0, "", "network error"); }
+        catch (Exception) { return (0, "", "unexpected transport error"); } // no-crash guarantee
     }
 
     private (Credentials? Cred, string? Error) ReadCredentials() =>
@@ -775,10 +837,21 @@ public static class Autostart
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AIUsageTray");
     private static string InstalledExe => Path.Combine(InstallDir, "AIUsageTray.exe");
 
+    private static string ExpectedRunValue => $"\"{InstalledExe}\"";
+
     public static bool IsEnabled()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        return key?.GetValue(ValueName) is string v && v.Contains("AIUsageTray.exe", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+            // Exact match on our quoted install path only — a foreign/malformed value counts as disabled.
+            return key?.GetValue(ValueName) is string v &&
+                   string.Equals(v, ExpectedRunValue, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        {
+            return false; // called at startup — must never crash
+        }
     }
 
     public static string? Enable()
@@ -792,7 +865,7 @@ public static class Autostart
                 File.Copy(current, InstalledExe, overwrite: true);
             }
             using var key = Registry.CurrentUser.CreateSubKey(RunKey);
-            key.SetValue(ValueName, $"\"{InstalledExe}\"");
+            key.SetValue(ValueName, ExpectedRunValue);
             return null;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
@@ -806,7 +879,9 @@ public static class Autostart
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-            if (key?.GetValue(ValueName) is string v && v.Contains("AIUsageTray.exe", StringComparison.OrdinalIgnoreCase))
+            // Delete only if the value is exactly ours — never remove a foreign installation's entry.
+            if (key?.GetValue(ValueName) is string v &&
+                string.Equals(v, ExpectedRunValue, StringComparison.OrdinalIgnoreCase))
                 key.DeleteValue(ValueName);
             return null;
         }
@@ -851,11 +926,23 @@ public sealed class TrayAppContext : ApplicationContext
 
     public TrayAppContext()
     {
+        // SynchronizationContext.Current is still null here (no control created, message loop
+        // not started) — install the WinForms context explicitly instead of capturing null.
+        if (SynchronizationContext.Current is not WindowsFormsSynchronizationContext)
+            SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
         _ui = SynchronizationContext.Current!;
+
         BuildMenu();
         ApplyState(_state);
-        _ = PollLoopAsync();
+        // Re-render the icon when display scale/monitor changes (DPI checklist item).
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+        _pollTask = PollLoopAsync(); // retained so faults are observable, not fire-and-forget
     }
+
+    private Task? _pollTask;
+
+    private void OnDisplayChanged(object? sender, EventArgs e) =>
+        _ui.Post(_ => ApplyState(_state), null);
 
     private async Task PollLoopAsync()
     {
@@ -879,8 +966,13 @@ public sealed class TrayAppContext : ApplicationContext
         UsageSnapshot? snap; string? err;
         try { (snap, err) = await _client.FetchAsync(_cts.Token); }
         catch (OperationCanceledException) { return; }
+        catch (Exception) { (snap, err) = (null, "unexpected error"); } // no-crash: poll loop must never fault
         var next = TrayStateMachine.Next(_state, snap, err);
-        _ui.Post(_ => { _state = next; ApplyState(next); BuildMenu(); }, null);
+        _ui.Post(_ =>
+        {
+            try { _state = next; ApplyState(next); BuildMenu(); }
+            catch (Exception) { /* rendering failure must not kill the UI thread */ }
+        }, null);
     }
 
     private void ApplyState(TrayState state)
@@ -940,6 +1032,7 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void ExitApp()
     {
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
         _cts.Cancel();
         _notify.Visible = false;
         _notify.Dispose();
@@ -972,12 +1065,14 @@ internal static class Program
 Note: left-click opening the menu — WinForms shows `ContextMenuStrip` on right-click natively; add in `TrayAppContext` constructor after `BuildMenu()`:
 
 ```csharp
+// Unsupported private API — guard the lookup so a runtime servicing change degrades
+// left-click to a no-op (right-click still works natively) instead of crashing.
+var showMenu = typeof(NotifyIcon).GetMethod("ShowContextMenu",
+    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 _notify.MouseUp += (_, e) =>
 {
-    if (e.Button == MouseButtons.Left)
-        typeof(NotifyIcon).GetMethod("ShowContextMenu",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(_notify, null);
+    if (e.Button == MouseButtons.Left && showMenu != null)
+        try { showMenu.Invoke(_notify, null); } catch (Exception) { }
 };
 ```
 
@@ -1021,13 +1116,17 @@ jobs:
           dotnet publish windows/AIUsage.Tray -c Release -r win-x64 --self-contained
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -o publish
-      - name: Checksum
+      - name: Package and checksum (zip built and hashed on the runner — the hash must cover the exact asset users download)
         shell: pwsh
-        run: Get-FileHash publish/AIUsageTray.exe -Algorithm SHA256 | Format-List > publish/SHA256.txt
+        run: |
+          Compress-Archive -Path publish/AIUsageTray.exe -DestinationPath AIUsageTray-win-x64.zip
+          (Get-FileHash AIUsageTray-win-x64.zip -Algorithm SHA256).Hash + "  AIUsageTray-win-x64.zip" | Out-File SHA256.txt -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: AIUsageTray-win-x64
-          path: publish/
+          path: |
+            AIUsageTray-win-x64.zip
+            SHA256.txt
 ```
 
 - [ ] **Step 2: README Windows section** (append before License in `README.md`):
@@ -1050,12 +1149,26 @@ A .NET port lives in `windows/` — tray icon shows the highest utilization with
 cd ~/Projects/ai-usage-menubar
 git add .github README.md README.ko.md && git commit -m "ci(windows): windows-latest publish workflow + README"
 git push
-gh run watch --exit-status          # wait for windows-build green
-gh run download -n AIUsageTray-win-x64 -D /tmp-scratch/win-artifact
-cd /tmp-scratch/win-artifact && zip -r AIUsageTray-win-x64.zip .
+# Pin the exact run — bare `gh run watch` can go interactive or track the wrong run
+RUN_ID=$(gh run list -w windows-build -L1 --json databaseId -q '.[0].databaseId')
+gh run watch "$RUN_ID" --exit-status
+gh run download "$RUN_ID" -n AIUsageTray-win-x64 -D win-artifact
 gh release create v1.1.0-rc1 --prerelease --title "v1.1.0-rc1 (Windows beta)" \
-  --notes "Windows tray port for on-device verification. Unsigned; SHA256.txt included." \
-  AIUsageTray-win-x64.zip
+  --notes "Windows tray port for on-device verification. Unsigned; SHA256.txt covers the zip." \
+  win-artifact/AIUsageTray-win-x64.zip win-artifact/SHA256.txt
 ```
 
+Also update the README Windows section with the measured exe size (from the CI artifact) and a note that self-contained builds don't receive .NET runtime patches automatically (republished on .NET patch releases as needed).
+
 - [ ] **Step 4: Hand user the verification checklist** (from DESIGN-windows.md §검수 체크리스트) with the pre-release URL. **User gate: 정식 v1.1.0 릴리스는 회사 PC 검수 통과 후.**
+
+- [ ] **Step 5 (after user verification passes): final release**
+
+```bash
+cd ~/Projects/ai-usage-menubar
+gh release create v1.1.0 --title "v1.1.0" \
+  --notes "Adds Windows system-tray port. macOS app unchanged from v1.0.0." \
+  win-artifact/AIUsageTray-win-x64.zip win-artifact/SHA256.txt "AI-Usage-v1.0.0.zip"
+```
+
+(macOS zip reused from the v1.0.0 asset — download it first with `gh release download v1.0.0 -p '*.zip'`. If the 검수 required code changes, rebuild via a fresh CI run and use that artifact instead.)
